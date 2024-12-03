@@ -1,0 +1,760 @@
+---
+title: "Seminar Finance and Banking"
+output: html_document
+date: "2024-11-11"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+
+rm(list = ls())
+
+# Import/install needed packages
+
+# install.packages("readxl")
+library(readxl)
+# install.packages("dplyr")
+library(dplyr)
+# install.packages("tidyr")
+library(tidyr)
+#install.packages("AER")
+library(AER)
+# install.packages("plm")
+library(plm)
+# install.packages("pdynmc")
+library(pdynmc)
+# install.packages("data.table")
+library(data.table)
+#install.packages("stats)
+library(stats)
+# install.packages("DescTools")
+library(DescTools)
+# install.packages("Hmisc")
+library(Hmisc)
+#install.packages("ggplot2")
+library(ggplot2)
+#install.packages("ggcorrplot")
+library(ggcorrplot)
+# install.packages("skimr")
+library(skimr)
+#install.packages("writexl")
+library(writexl)
+library(car)
+
+```
+
+
+```{r}
+# Path to the Excel file
+file_path <- "import_monthly.xlsx"
+
+# Get sheet names and exclude the first two sheets
+sheets <- excel_sheets(file_path)[-c(1, 2)]
+
+# Initialize an empty list to store data
+data_list <- list()
+
+# Loop through each sheet, read data and reshape into long format
+for (sheet in sheets) {
+  # Read the data from the current sheet
+  data <- read_excel(file_path, sheet = sheet)
+  
+  # Assume the first column is the date
+  colnames(data)[1] <- "Date"
+  
+  # Reshape data from wide to long format
+  long_data <- data %>%
+    pivot_longer(-Date, names_to = "Variable", values_to = "Value")
+  
+  # Add the sheet name as an identifier
+  long_data$Sheet <- sheet
+  
+  # Store the reshaped data in the list
+  data_list[[sheet]] <- long_data
+}
+
+print(long_data)
+# Combine all sheets into a single long dataset
+combined_data <- bind_rows(data_list)
+
+# Pivot the data to wide format with separate columns for each sheet
+wide_data <- combined_data %>%
+  pivot_wider(id_cols = c(Date, Variable), names_from = Sheet, values_from = Value)
+
+# Rename the ISIN column
+colnames(wide_data)[2] <- "ISIN"
+
+# Converting to dataframe type
+dat <- as.data.frame(wide_data)
+
+# Convert columns to numeric and date
+dat$Date <- as.Date(dat$Date)
+dat[3:18] <- lapply(dat[3:18], as.numeric)
+
+# Read the COMPANIES_LIST sheet
+companies_list <- read_excel(file_path, sheet = "COMPANIES_LIST")
+
+# Add industries and countries
+dat <- dat %>%
+  left_join(companies_list, by = "ISIN")
+
+head(dat)
+```
+
+```{r}
+
+### Calculating continuous returns
+dat <- dat %>%
+  arrange(ISIN, Date) # Sorting by date and ISIN
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(RET = log(RI / shift(RI, type = "lag"))) %>% # Discrete returns for each ISIN
+  as.data.frame()
+
+### Dividing yearly emissions by month
+
+dat$SCOPE_1 = dat$SCOPE_1 / 12
+dat$SCOPE_2 = dat$SCOPE_2 / 12
+dat$SCOPE_3 = dat$SCOPE_3 / 12
+
+### Calculating difference rate in emissions
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(del_SCOPE_1 = SCOPE_1 - shift(SCOPE_1, n = 12, type = "lag")) %>%
+  as.data.frame()
+
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(del_SCOPE_2 = SCOPE_2 - shift(SCOPE_2, n = 12, type = "lag")) %>%
+  as.data.frame()
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(del_SCOPE_3 = SCOPE_3 - shift(SCOPE_3, n = 12, type = "lag")) %>%
+  as.data.frame()
+
+### Calculating logarithms of emissions
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(LOGSCOPE_1 = log(SCOPE_1)) %>%
+  as.data.frame()
+
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(LOGSCOPE_2 = log(SCOPE_2)) %>%
+  as.data.frame()
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(LOGSCOPE_3 = log(SCOPE_3)) %>%
+  as.data.frame()
+
+### Calculate emission intensity logarithm
+
+dat <- suppressWarnings(
+  dat %>%
+  group_by(ISIN) %>%
+  mutate(
+    LOGINT_SCOPE_1 = log(SCOPE_1 / REVENUE)
+  ) %>%
+  as.data.frame()
+)
+
+dat <- suppressWarnings(
+  dat %>%
+  group_by(ISIN) %>%
+  mutate(
+    LOGINT_SCOPE_2 = log(SCOPE_2 / REVENUE)
+  ) %>%
+  as.data.frame()
+)
+
+dat <- suppressWarnings(
+  dat %>%
+  group_by(ISIN) %>%
+  mutate(
+    LOGINT_SCOPE_3 = log(SCOPE_3 / REVENUE)
+  ) %>%
+  as.data.frame()
+)
+
+### Calculating lagged emissions
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(LAG_LOGSCOPE_1 = log(shift(SCOPE_1, n = 12, type = "lag"))) %>%
+  as.data.frame()
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(LAG_LOGSCOPE_2 = log(shift(SCOPE_2, n = 12, type = "lag"))) %>%
+  as.data.frame()
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(LAG_LOGSCOPE_3 = log(shift(SCOPE_3, n = 12, type = "lag"))) %>%
+  as.data.frame()
+
+```
+
+
+
+```{r}
+
+# Transferring percentage values
+
+dat$VOLAT <- dat$VOLAT / 100
+dat$ROE <- dat$ROE / 100
+
+# Calculate logarithm of capitalization
+
+dat$SIZE <- dat$SIZE * 1000000 #transferring millions to dollars
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(LOGSIZE = log(SIZE)) %>% 
+  as.data.frame()
+
+
+# Calculate book-to-market value
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(B_to_M = 1 / M_to_B) %>%
+  as.data.frame()
+
+# Calculate invest to assets
+
+dat <- suppressWarnings(
+  dat %>%
+  group_by(ISIN) %>%
+  mutate(LOG_INVEST_to_A = log(CAPEX / ASSETS)) %>%
+  as.data.frame()
+)
+
+
+# Calculate the natural logarithm of plant, property and equipment
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(LOGPPE = log(PPE)) %>% 
+  as.data.frame()
+
+# Calculate sales growth
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(SALESGR = (REVENUE - shift(REVENUE, n = 1, type = "lag")) / shift(SIZE, n = 1, type = "lag")) %>%
+  as.data.frame()
+
+
+# Calculate earnings per share
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(EPSGR = (EPS - shift(EPS, n = 1, type = "lag")) / PRICE) %>%
+  as.data.frame()
+
+# Calculate the average of recent 12 months' returns
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(MOM = shift(frollmean(RET, n = 12), n = 1, type = "lag")) %>%
+  as.data.frame()
+
+# Calculate year
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(YEAR = year(Date)) %>%
+  as.data.frame()
+
+# Calculate month
+
+dat <- dat %>%
+  group_by(ISIN) %>%
+  mutate(MONTH = month(Date)) %>%
+  as.data.frame()
+
+```
+
+```{r}
+
+head(dat)
+```
+
+```{r}
+
+# Select columns for the final panel data set
+
+panel_dat <- dat %>% select(Date, ISIN, RET, LOGSCOPE_1, LOGSCOPE_2, LOGSCOPE_3, del_SCOPE_1, del_SCOPE_2, del_SCOPE_3, LOGINT_SCOPE_1, LOGINT_SCOPE_2, LOGINT_SCOPE_3, LAG_LOGSCOPE_1, LAG_LOGSCOPE_2, LAG_LOGSCOPE_3, LOGSIZE, B_to_M, ROE, LEVERAGE, LOG_INVEST_to_A, LOGPPE, BETA, VOLAT, SALESGR, EPSGR, MOM, YEAR, MONTH, "TRBC Industry Group Name", "Country of Incorporation")
+
+# Replace Infinite values with NA
+
+panel_dat[] <- lapply(panel_dat, function(x) {
+  if (is.numeric(x)) {
+    x[is.infinite(x)] <- NA
+  }
+  return(x)
+})
+
+# Delete companies with no data at all
+panel_dat <- panel_dat %>%
+  group_by(ISIN) %>%
+  filter(!all(is.na(across(-c('Date', 'YEAR', 'MONTH', 'TRBC Industry Group Name', 'Country of Incorporation'))))) %>%
+  ungroup()
+
+
+head(panel_dat)
+```
+```{r}
+
+
+# Directory to save plots
+dir.create("plots", showWarnings = FALSE)
+
+# Loop through column names and generate plots
+for (var in colnames(panel_dat[3:26])) {
+  plot <- ggplot(panel_dat, aes(y = .data[[var]])) +
+    geom_boxplot() +
+    ggtitle(var)
+  
+  plot
+  
+  ggsave(filename = paste0("plots/", var, "_boxplot.png"), plot = plot, width = 6, height = 4, dpi = 300)
+}
+
+
+```
+
+```{r}
+# Winsorsing data, probs - probability level
+panel_dat$RET <- Winsorize(panel_dat$RET, val = quantile(panel_dat$RET, probs = c(0.075, 0.925), na.rm = TRUE))
+
+panel_dat$del_SCOPE_1 <- Winsorize(panel_dat$del_SCOPE_1, val = quantile(panel_dat$del_SCOPE_1, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$LOGSCOPE_1 <- Winsorize(panel_dat$LOGSCOPE_1, val = quantile(panel_dat$LOGSCOPE_1, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$LOGSCOPE_2 <- Winsorize(panel_dat$LOGSCOPE_2, val = quantile(panel_dat$LOGSCOPE_2, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$del_SCOPE_2 <- Winsorize(panel_dat$del_SCOPE_2, val = quantile(panel_dat$del_SCOPE_2, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$del_SCOPE_3 <- Winsorize(panel_dat$del_SCOPE_3, val = quantile(panel_dat$del_SCOPE_3, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$LOGINT_SCOPE_1 <- Winsorize(panel_dat$LOGINT_SCOPE_1, val = quantile(panel_dat$LOGINT_SCOPE_1, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$LOGINT_SCOPE_2 <- Winsorize(panel_dat$LOGINT_SCOPE_2, val = quantile(panel_dat$LOGINT_SCOPE_2, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$LAG_LOGSCOPE_1 <- Winsorize(panel_dat$LAG_LOGSCOPE_1, val = quantile(panel_dat$LAG_LOGSCOPE_1, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$LAG_LOGSCOPE_2 <- Winsorize(panel_dat$LAG_LOGSCOPE_2, val = quantile(panel_dat$LAG_LOGSCOPE_2, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$B_to_M <- Winsorize(panel_dat$B_to_M, val = quantile(panel_dat$B_to_M, probs = c(0.03, 0.97), na.rm = TRUE))
+
+panel_dat$ROE <- Winsorize(panel_dat$ROE, val = quantile(panel_dat$ROE, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$LEVERAGE <- Winsorize(panel_dat$LEVERAGE, val = quantile(panel_dat$LEVERAGE, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$LOG_INVEST_to_A <- Winsorize(panel_dat$LOG_INVEST_to_A, val = quantile(panel_dat$LOG_INVEST_to_A, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$BETA <- Winsorize(panel_dat$BETA, val = quantile(panel_dat$BETA, probs = c(0.025, 0.975), na.rm = TRUE))
+
+panel_dat$VOLAT <- Winsorize(panel_dat$VOLAT, val = quantile(panel_dat$VOLAT, probs = c(0.025, 0.975), na.rm = TRUE))
+
+panel_dat$SALESGR <- Winsorize(panel_dat$SALESGR, val = quantile(panel_dat$SALESGR, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$EPSGR <- Winsorize(panel_dat$EPSGR, val = quantile(panel_dat$EPSGR, probs = c(0.01, 0.99), na.rm = TRUE))
+
+panel_dat$MOM <- Winsorize(panel_dat$MOM, val = quantile(panel_dat$MOM, probs = c(0.01, 0.99), na.rm = TRUE))
+
+```
+
+```{r}
+
+
+# Directory to save plots
+dir.create("plots2", showWarnings = FALSE)
+
+#Generate and print plots
+for (var in colnames(panel_dat[3:26])) {
+  plot <- ggplot(panel_dat, aes(y = .data[[var]])) +
+    geom_boxplot() +
+    ggtitle(var)
+  
+  # Print plot
+  plot
+  
+  # Save plot
+  ggsave(filename = paste0("plots2/", var, "_boxplot.png"), plot = plot, width = 6, height = 4, dpi = 300)
+}
+
+
+```
+
+```{r}
+#Descriptive statistics
+summary(panel_dat)
+```
+```{r}
+
+# Enhanced descriptive statistics
+summary <- as.data.frame(skim(panel_dat))
+summary
+write_xlsx(summary, "stat_summary.xlsx")
+
+```
+
+
+
+```{r}
+# Correlation matrix
+
+corr_matrix <- cor(panel_dat[3:26], use = "pairwise.complete.obs") # only observations without NAs
+
+ggcorrplot(
+  corr_matrix,
+  method = "square",        
+  lab = TRUE,             
+  title = "Correlation Matrix",
+  outline.color = "white",
+  lab_size = 1.5
+) +
+  
+theme(
+  axis.text.x = element_text(angle = 90, vjust = 0.5, hjust = 1, size = 5),
+  axis.text.y = element_text(size = 5),
+  axis.title = element_text(size = 5, face = "bold")
+)
+
+```
+
+```{r}
+
+### Custom function for checking for autocorrelation and heteroscedasticity and returning the robust matrix
+
+HA_summary <- function(lm_model) {
+  
+  alpha = 0.05 # probability
+# Breusch-Pagan test for heteroscedasticity
+# H0: homoscedasticity
+# p < 0.05, H0 rejected -> Residuals are heteroscedastic
+  H_test_p = bptest(lm_model)$p.value
+  
+# Ljung-Box Test for autocorrelation
+# H0: no autocorrelation
+# p < 0.05, H0 rejected -> Residuals is autocorrelated
+  A_test_p = Box.test(resid(lm_model), type = "Ljung-Box")$p.value  
+
+
+  if (A_test_p <= alpha) { #if there is autocorrelation
+    return(summary(lm_model, vcov = vcovHAC))
+  }
+  
+  else if (H_test_p <= alpha) { #if there is no autocorrelation, but only heteroscedasticity 
+    return(summary(lm_model, vcov = vcovHC))
+  }
+  
+  else { #no heteroscedasticity and autocorrelation
+    return(summary(lm_model))
+  }
+
+}
+ 
+
+```
+
+```{r}
+library(broom)
+library(writexl)
+
+# Custom function for exporting the regression to the Excel (for copying it to Word)
+
+# Define the function
+export_model <- function(model, file_path = NULL) {
+  # Extract coefficients and p-values
+  model_summary <- tidy(model)
+  
+  # Select relevant columns
+  output <- model_summary[, c("term", "estimate", "p.value")]
+  
+  # Rename columns
+  colnames(output) <- c("Variable", "Coefficient", "P-Value")
+  
+  # Export in decimal format
+  output$Coefficient <- format(round(output$Coefficient, 3), scientific = FALSE)
+  output$`P-Value` <- format(round(output$`P-Value`, 3), scientific = FALSE)
+  
+  # Add significance stars
+  output$Significance <- ifelse(output$`P-Value` < 0.001, "***",
+                         ifelse(output$`P-Value` < 0.01, "**",
+                         ifelse(output$`P-Value` < 0.05, "*",
+                         ifelse(output$`P-Value` < 0.1, ".", ""))))
+  
+  # Combine coefficient, significance, and p-Value into one column
+  output$`Coefficient & Significance` <- paste0(output$Coefficient, output$Significance, 
+                                                " (p = ", output$`P-Value`, ")")
+  
+  # Select only variable and combined column for output
+  output <- output[, c("Variable", "Coefficient & Significance")]
+  
+  # Generate default file name
+  if (is.null(file_path)) {
+    model_name <- deparse(substitute(model))
+    file_path <- paste0("Regression outputs monthly", "/", model_name, "_coefficients.xlsx")
+  }
+  
+  # Export to Excel
+  write_xlsx(output, file_path)
+  
+}
+```
+
+
+# ESTIMATING FIXED-EFFECT REGRESSIONS FOR RETURNS
+## WITH LOGSCOPES
+
+
+```{r}
+# Fixed effects regression
+# Factor reference levels: Industry - Aerospace & Defense, Country - Austria, Year - 2011, Month - 1
+
+#Drop rows without regressands
+dat_RET_LS1 <- panel_dat %>% drop_na(RET, LOGSCOPE_1)
+
+model_RET_LS1 <- lm(formula = RET ~ LOGSCOPE_1 + LOGSIZE + B_to_M + LEVERAGE + MOM + LOG_INVEST_to_A + ROE + LOGPPE + BETA + VOLAT + SALESGR + EPSGR + as.factor(`TRBC Industry Group Name`) +
+                      as.factor(`Country of Incorporation`) + as.factor(YEAR) + as.factor(MONTH), data = dat_RET_LS1) # + as.factor(`Country of Incorporation`)
+
+export_model(model_RET_LS1, NULL) #export to Excel
+
+# Summary with errors accounting for heteroscedasticity/autocorrelation
+HA_summary(model_RET_LS1) 
+```
+
+
+```{r}
+# Fixed effects regression
+# Factor reference levels: Industry - Aerospace & Defense, Country - Austria, Year - 2011, Month - 1
+
+#Drop rows without regressands
+dat_RET_LS2 <- panel_dat %>% drop_na(RET, LOGSCOPE_2)
+
+model_RET_LS2 <- lm(formula = RET ~ LOGSCOPE_2 + LOGSIZE + B_to_M + LEVERAGE + MOM + LOG_INVEST_to_A + ROE + LOGPPE + BETA + VOLAT + SALESGR + EPSGR + as.factor(`TRBC Industry Group Name`) + as.factor(YEAR) + as.factor(MONTH) + as.factor(`Country of Incorporation`), data = dat_RET_LS2) # + as.factor(`Country of Incorporation`) - almost insignificant
+
+export_model(model_RET_LS2, NULL) #export to Excel
+
+HA_summary(model_RET_LS2) 
+```
+```{r}
+# Fixed effects regression
+# Factor reference levels: Industry - Aerospace & Defense, Country - Austria, Year - 2011, Month - 1
+
+#Drop rows without regressands
+dat_RET_LS3 <- panel_dat %>% drop_na(RET, LOGSCOPE_3)
+
+model_RET_LS3 <- lm(formula = RET ~ LOGSCOPE_3 + LOGSIZE + B_to_M + LEVERAGE + MOM + LOG_INVEST_to_A + ROE + LOGPPE + BETA + VOLAT + SALESGR + EPSGR + as.factor(`TRBC Industry Group Name`) + as.factor(YEAR) + as.factor(MONTH) + as.factor(`Country of Incorporation`), data = dat_RET_LS3) # as.factor(`Country of Incorporation`) - almost insignificant
+
+export_model(model_RET_LS3, NULL) #export to Excel
+
+HA_summary(model_RET_LS3) 
+```
+
+
+
+## With growth rates
+
+```{r}
+
+#Drop rows without regressands
+dat_RET_d1 <- panel_dat %>% drop_na(RET, del_SCOPE_1)
+
+
+# Fixed effects regression
+# Factor reference levels: Industry - Aerospace & Defense, Country - Austria, Year - 2011, Month - 1
+
+
+model_RET_d1 <- lm(formula = RET ~ del_SCOPE_1 + LOGSIZE + B_to_M + LEVERAGE + MOM + LOG_INVEST_to_A + ROE + LOGPPE + BETA + VOLAT + SALESGR + EPSGR + as.factor(`TRBC Industry Group Name`) + as.factor(YEAR) + as.factor(MONTH) + as.factor(`Country of Incorporation`), data = dat_RET_d1) # as.factor(`Country of Incorporation`) - almost insignificant
+
+export_model(model_RET_d1, NULL) #export to Excel
+
+HA_summary(model_RET_d1) 
+
+```
+
+```{r}
+
+#Drop rows without regressands
+dat_RET_d2 <- panel_dat %>% drop_na(RET, del_SCOPE_2)
+
+
+# Fixed effects regression
+# Factor reference levels: Industry - Aerospace & Defense, Country - Austria, Year - 2011, Month - 1
+
+
+model_RET_d2 <- lm(formula = RET ~ del_SCOPE_2 + LOGSIZE + B_to_M + LEVERAGE + MOM + LOG_INVEST_to_A + ROE + LOGPPE + BETA + VOLAT + SALESGR + EPSGR + as.factor(`TRBC Industry Group Name`) + as.factor(YEAR) + as.factor(MONTH) + as.factor(`Country of Incorporation`), data = dat_RET_d2) # as.factor(`Country of Incorporation`) - almost insignificant
+
+export_model(model_RET_d2, NULL) #export to Excel
+
+HA_summary(model_RET_d2) 
+
+```
+
+```{r}
+
+#Drop rows without regressands
+dat_RET_d3 <- panel_dat %>% drop_na(RET, del_SCOPE_3)
+
+
+# Fixed effects regression
+# Factor reference levels: Industry - Aerospace & Defense, Country - Austria, Year - 2011, Month - 1
+
+
+model_RET_d3 <- lm(formula = RET ~ del_SCOPE_3 + LOGSIZE + B_to_M + LEVERAGE + MOM + LOG_INVEST_to_A + ROE + LOGPPE + BETA + VOLAT + SALESGR + EPSGR + as.factor(`TRBC Industry Group Name`) + as.factor(YEAR) + as.factor(MONTH) + as.factor(`Country of Incorporation`), data = dat_RET_d3) # as.factor(`Country of Incorporation`) - almost insignificant
+
+export_model(model_RET_d3, NULL) #export to Excel
+
+HA_summary(model_RET_d3) 
+
+```
+## With logarimthm of intensity
+
+```{r}
+
+#Drop rows without regressands
+dat_RET_i1 <- panel_dat %>% drop_na(RET, LOGINT_SCOPE_1)
+
+
+# Fixed effects regression
+# Factor reference levels: Industry - Aerospace & Defense, Country - Austria, Year - 2011, Month - 1
+
+
+model_RET_i1 <- lm(formula = RET ~ LOGINT_SCOPE_1 + LOGSIZE + B_to_M + LEVERAGE + MOM + LOG_INVEST_to_A + ROE + LOGPPE + BETA + VOLAT + SALESGR + EPSGR + as.factor(`TRBC Industry Group Name`) + as.factor(YEAR) + as.factor(MONTH) + as.factor(`Country of Incorporation`), data = dat_RET_i1) # as.factor(`Country of Incorporation`) - almost insignificant
+
+export_model(model_RET_i1, NULL) #export to Excel
+
+HA_summary(model_RET_i1) 
+
+```
+
+```{r}
+
+#Drop rows without regressands
+dat_RET_i2 <- panel_dat %>% drop_na(RET, LOGINT_SCOPE_2)
+
+
+# Fixed effects regression
+# Factor reference levels: Industry - Aerospace & Defense, Country - Austria, Year - 2011, Month - 1
+
+
+model_RET_i2 <- lm(formula = RET ~ LOGINT_SCOPE_2 + LOGSIZE + B_to_M + LEVERAGE + MOM + LOG_INVEST_to_A + ROE + LOGPPE + BETA + VOLAT + SALESGR + EPSGR + as.factor(`TRBC Industry Group Name`) + as.factor(YEAR) + as.factor(MONTH) + as.factor(`Country of Incorporation`), data = dat_RET_i2) # as.factor(`Country of Incorporation`) - almost insignificant
+
+export_model(model_RET_i2, NULL) #export to Excel
+
+HA_summary(model_RET_i2) 
+
+```
+
+```{r}
+
+#Drop rows without regressands
+dat_RET_i3 <- panel_dat %>% drop_na(RET, LOGINT_SCOPE_3)
+
+
+# Fixed effects regression
+# Factor reference levels: Industry - Aerospace & Defense, Country - Austria, Year - 2011, Month - 1
+
+
+model_RET_i3 <- lm(formula = RET ~ LOGINT_SCOPE_3 + LOGSIZE + B_to_M + LEVERAGE + MOM + LOG_INVEST_to_A + ROE + LOGPPE + BETA + VOLAT + SALESGR + EPSGR + as.factor(`TRBC Industry Group Name`) + as.factor(YEAR) + as.factor(MONTH) + as.factor(`Country of Incorporation`), data = dat_RET_i3) # as.factor(`Country of Incorporation`) - almost insignificant
+
+export_model(model_RET_i3, NULL) #export to Excel
+
+HA_summary(model_RET_i3) 
+
+```
+
+```{r}
+# Fixed effects regression
+# Factor reference levels: Industry - Aerospace & Defense, Country - Austria, Year - 2011, Month - 1
+
+#Drop rows without regressands
+dat_RET_LLS1 <- panel_dat %>% drop_na(RET, LAG_LOGSCOPE_1)
+
+model_RET_LLS1 <- lm(formula = RET ~ LAG_LOGSCOPE_1 + LOGSIZE + B_to_M + LEVERAGE + MOM + LOG_INVEST_to_A + ROE + LOGPPE + BETA + VOLAT + SALESGR + EPSGR + as.factor(`TRBC Industry Group Name`) + as.factor(YEAR) + as.factor(MONTH) + as.factor(`Country of Incorporation`), data = dat_RET_LLS1) # as.factor(`Country of Incorporation`) - almost insignificant
+
+export_model(model_RET_LLS1, NULL) #export to Excel
+
+HA_summary(model_RET_LLS1) 
+```
+
+```{r}
+# Fixed effects regression
+# Factor reference levels: Industry - Aerospace & Defense, Country - Austria, Year - 2011, Month - 1
+
+#Drop rows without regressands
+dat_RET_LLS2 <- panel_dat %>% drop_na(RET, LAG_LOGSCOPE_2)
+
+model_RET_LLS2 <- lm(formula = RET ~ LAG_LOGSCOPE_2 + LOGSIZE + B_to_M + LEVERAGE + MOM + LOG_INVEST_to_A + ROE + LOGPPE + BETA + VOLAT + SALESGR + EPSGR + as.factor(`TRBC Industry Group Name`) + as.factor(YEAR) + as.factor(MONTH) + as.factor(`Country of Incorporation`), data = dat_RET_LLS2) # as.factor(`Country of Incorporation`) - almost insignificant
+
+export_model(model_RET_LLS2, NULL) #export to Excel
+
+HA_summary(model_RET_LLS2) 
+```
+
+```{r}
+# Fixed effects regression
+# Factor reference levels: Industry - Aerospace & Defense, Country - Austria, Year - 2011, Month - 1
+
+#Drop rows without regressands
+dat_RET_LLS3 <- panel_dat %>% drop_na(RET, LAG_LOGSCOPE_3)
+
+model_RET_LLS3 <- lm(formula = RET ~ LAG_LOGSCOPE_3 + LOGSIZE + B_to_M + LEVERAGE + MOM + LOG_INVEST_to_A + ROE + LOGPPE + BETA + VOLAT + SALESGR + EPSGR + as.factor(`TRBC Industry Group Name`) + as.factor(YEAR) + as.factor(MONTH) + as.factor(`Country of Incorporation`), data = dat_RET_LLS3) # as.factor(`Country of Incorporation`) - almost insignificant
+
+export_model(model_RET_LLS3, NULL) #export to Excel
+
+HA_summary(model_RET_LLS3) 
+```
+```{r}
+# Variance inflation test for multicolliniarity: last column - adjusted VIF
+# Not larger than 5, does not require attention
+vif(model_RET_LS1)
+```
+```{r}
+# Variance inflation test for multicolliniarity: last column - adjusted VIF
+# Not larger than 5, does not require attention
+vif(model_RET_LS2)
+```
+```{r}
+# Variance inflation test for multicolliniarity: last column - adjusted VIF
+# Not larger than 5, does not require attention
+vif(model_RET_LS3)
+```
+```{r}
+# Variance inflation test for multicolliniarity: last column - adjusted VIF
+# Not larger than 5, does not require attention
+vif(model_RET_LLS1)
+```
+```{r}
+# Variance inflation test for multicolliniarity: last column - adjusted VIF
+# Not larger than 5, does not require attention
+vif(model_RET_LLS2)
+```
+```{r}
+# Variance inflation test for multicolliniarity: last column - adjusted VIF
+# Not larger than 5, does not require attention
+vif(model_RET_LLS3)
+```
+
+
+
+
+
+
+
+
